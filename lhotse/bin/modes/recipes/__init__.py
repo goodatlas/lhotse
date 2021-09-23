@@ -31,3 +31,4 @@ from .switchboard import *
 from .tedlium import *
 from .vctk import *
 from .yesno import *
+from .zeroth import *

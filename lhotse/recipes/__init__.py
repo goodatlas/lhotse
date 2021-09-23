@@ -33,3 +33,4 @@ from .tedlium import download_tedlium, prepare_tedlium
 from .timit import download_timit, prepare_timit
 from .vctk import download_vctk, prepare_vctk
 from .yesno import download_yesno, prepare_yesno
+from .zeroth import prepare_zeroth
