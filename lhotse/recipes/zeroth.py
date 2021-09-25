@@ -15,8 +15,7 @@ from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike
 
-ZEROTH = ('recData01', 'recData02', 'recData03',
-          'testData01', 'testData02')
+ZEROTH = ('train', 'dev', 'test')
 
 # def download_librispeech(
 #         target_dir: Pathlike = '.',
@@ -107,7 +106,7 @@ def prepare_zeroth(
         )
         if not dataset_parts:
             raise ValueError(
-                f"Could not find any of librispeech or mini_librispeech splits in: {corpus_dir}")
+                f"Could not find any of zeroth splits in: {corpus_dir}")
     elif isinstance(dataset_parts, str):
         dataset_parts = [dataset_parts]
 
@@ -122,13 +121,16 @@ def prepare_zeroth(
         manifests = read_manifests_if_cached(dataset_parts=dataset_parts,
                                              output_dir=output_dir)
 
-    speaker_info_path = corpus_dir / "SPEAKERS"
+    speaker_info_path = corpus_dir / "AUDIO_INFO"
     if speaker_info_path.exists():
         speakers = {}
         print(f'found speaker_info file: {speaker_info_path}')
         with open(speaker_info_path) as f:
             for line in f:
                 splits = line.strip().split('|')
+                if len(splits) <= 1:
+                    logging.debug(f"unexpected line: {line}")
+                    continue
                 speaker_id = splits[0]
                 speaker_name = splits[1]
                 gender = splits[2]
