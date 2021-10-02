@@ -15,7 +15,11 @@ from lhotse.recipes.utils import manifests_exist, read_manifests_if_cached
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike
 
-ZEROTH = ('train', 'dev', 'test')
+import morfessor
+from morfessor import BaselineModel
+import os
+
+ZEROTH = ('train', 'train2', 'dev', 'test', 'test2')
 
 # def download_librispeech(
 #         target_dir: Pathlike = '.',
@@ -89,10 +93,10 @@ ZEROTH = ('train', 'dev', 'test')
 
 def prepare_zeroth(
     corpus_dir: Pathlike,
+    morpheme_analysis_model_path: Optional[Pathlike],
+    word_boundary_symbol: Optional[str],
     dataset_parts: Union[str, Sequence[str]] = 'auto',
     output_dir: Optional[Pathlike] = None,
-    # morpheme_analysis_model_path: Optional[Pathlike],
-    # word_boundary_symbol: Optional[str],
     num_jobs: int = 1,
 ) -> Dict[str, Dict[str, Union[RecordingSet, SupervisionSet]]]:
 
@@ -140,14 +144,14 @@ def prepare_zeroth(
                 speakers[speaker_id]["gender"] = gender
                 speakers[speaker_id]["script_id"] = script_id
 
-    # if os.path.exists(morpheme_analysis_model_path):
-    #    # load model
-    #    print(
-    #        f'Loading morpheme analysis model: {morpheme_analysis_model_path}')
-    #    io = morfessor.MorfessorIO()
-    #    model = io.read_binary_model_file(morpheme_analysis_model_path)
+    if os.path.exists(morpheme_analysis_model_path):
+        # load model
+        print(
+            f'Loading morpheme analysis model: {morpheme_analysis_model_path}')
+        io = morfessor.MorfessorIO()
+        model = io.read_binary_model_file(morpheme_analysis_model_path)
 
-    #    print(f'word boundary symbol: {word_boundary_symbol}')
+        print(f'word boundary symbol: {word_boundary_symbol}')
 
     with ThreadPoolExecutor(num_jobs) as ex:
         for part in tqdm(dataset_parts, desc='Dataset parts'):
@@ -167,7 +171,7 @@ def prepare_zeroth(
                 with open(trans_path) as f:
                     for line in f:
                         futures.append(
-                            ex.submit(parse_utterance, part_path, line, speakers))
+                            ex.submit(parse_utterance, part_path, line, speakers, model, word_boundary_symbol))
 
             for future in tqdm(futures, desc='Processing', leave=False):
                 result = future.result()
@@ -202,25 +206,31 @@ def parse_utterance(
         dataset_split_path: Path,
         line: str,
         speakers: Optional[Dict],
-        # model: Optional[BaselineModel],
-        # word_boundary_symbol: Optional[str]
+        model: Optional[BaselineModel],
+        word_boundary_symbol: Optional[str]
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
     recording_id, text = line.strip().split(maxsplit=1)
     # recording_id, text
     # 014_001_001 네 합정동이요 네 잠시만요 네 말씀해주세요 다진마늘 국산 하나 무 한포 세제 이 키로짜리 두 개 쇠고기 다시다
     # 014_001_002 저희는 상담사가요 열 명 정도 됩니다 사장님 배추 한 포 배추 아직까지 망으로 나와요 네 아직까지 망으로 나와요
 
-    # if model is not None:
-    #    smooth = 0
-    #    maxlen = 30
-    #    analyzed_text = ""
-    #    for word in text.split():
-    #        constructions, logp = model.viterbi_segment(
-    #            word, smooth, maxlen)
-    #        analyzed_text += word_boundary_symbol + \
-    #            " ".join(constructions) + " "
-    #    text = analyzed_text.strip()
-    #    custom = "morpheme_updated"
+    # exclude setencese with non-Korean characters
+    match = re.search(r"[^가-힣\s]+", text)
+    if match:
+        return None
+
+    # apply morpheme analysis on word-based text
+    if model is not None:
+        smooth = 0
+        maxlen = 30
+        analyzed_text = ""
+        for word in text.split():
+            constructions, logp = model.viterbi_segment(
+                word, smooth, maxlen)
+            analyzed_text += word_boundary_symbol + \
+                " ".join(constructions) + " "
+        text = analyzed_text.strip()
+        custom = "morpheme_updated"
 
     # Create the Recording first
     speaker_id = recording_id.split('_')[0]
@@ -250,6 +260,7 @@ def parse_utterance(
         speaker=re.sub(
             r'-.*', r'', recording.id) if speaker is None else speaker,
         gender=None if gender is None else gender,
+        custom=None if custom is None else custom,
         text=text.strip()
     )
     return recording, segment
