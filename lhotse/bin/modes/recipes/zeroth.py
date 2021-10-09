@@ -1,7 +1,7 @@
 import click
 
 from lhotse.bin.modes import download, prepare
-from lhotse.recipes.zeroth import prepare_zeroth
+from lhotse.recipes.zeroth import prepare_zeroth, download_zerothspeech
 from lhotse.utils import Pathlike
 
 __all__ = ['zeroth']
@@ -29,12 +29,10 @@ def zeroth(
                    output_dir=output_dir, num_jobs=num_jobs)
 
 
-# @download.command(context_settings=dict(show_default=True))
-# @click.argument('target_dir', type=click.Path())
-# @click.option('--full/--mini', default=True, help='Download Librispeech [default] or mini Librispeech.')
-# Def librispeech(
-#        target_dir: Pathlike,
-#        full: bool
-# ):
-#    """(Mini) Librispeech download."""
-#    download_librispeech(target_dir, dataset_parts='librispeech' if full else 'mini_librispeech')
+@download.command(context_settings=dict(show_default=True))
+@click.argument('target_dir', type=click.Path())
+def zeroth(
+    target_dir: Pathlike,
+):
+    """Zeroth data download"""
+    download_zerothspeech(target_dir)

@@ -1,3 +1,6 @@
+import threading
+import sys
+import boto3
 import logging
 import re
 import shutil
@@ -19,76 +22,136 @@ import morfessor
 from morfessor import BaselineModel
 import os
 
-ZEROTH = ('train', 'train2', 'dev', 'test', 'test2')
+ZEROTH = ('train', 'dev', 'test')
 
-# def download_librispeech(
-#         target_dir: Pathlike = '.',
-#         dataset_parts: Optional[Union[str, Sequence[str]]] = "mini_librispeech",
-#         force_download: bool = False,
-#         alignments: bool = False,
-#         base_url: str = 'http://www.openslr.org/resources',
-#         alignments_url: str = LIBRISPEECH_ALIGNMENTS_URL,
-# ) -> None:
-#     """
-#     Download and untar the dataset, supporting both LibriSpeech and MiniLibrispeech
 
-#     :param target_dir: Pathlike, the path of the dir to storage the dataset.
-#     :param dataset_parts: "librispeech", "mini_librispeech",
-#         or a list of splits (e.g. "dev-clean") to download.
-#     :param force_download: Bool, if True, download the tars no matter if the tars exist.
-#     :param alignments: should we download the alignments. The original source is:
-#         https://github.com/CorentinJ/librispeech-alignments
-#     :param base_url: str, the url of the OpenSLR resources.
-#     :param alignments_url: str, the url of LibriSpeech word alignments
-#     """
-#     target_dir = Path(target_dir)
-#     target_dir.mkdir(parents=True, exist_ok=True)
+class ProgressPercentage(object):
+    ''' Progress Class
+    Class for calculating and displaying download progress
+    '''
+    # https://gist.github.com/egeulgen/538aadc90275d79d514a5bacc4d5694e
 
-#     if dataset_parts == "librispeech":
-#         dataset_parts = LIBRISPEECH
-#     elif dataset_parts == "mini_librispeech":
-#         dataset_parts = MINI_LIBRISPEECH
-#     elif isinstance(dataset_parts, str):
-#         dataset_parts = [dataset_parts]
+    def __init__(self, client, bucket, filename):
+        ''' Initialize
+        initialize with: file name, file size and lock.
+        Set seen_so_far to 0. Set progress bar length
+        '''
+        self._filename = filename
+        self._size = client.head_object(Bucket=bucket, Key=filename)[
+            'ContentLength']
+        self._seen_so_far = 0
+        self._lock = threading.Lock()
+        self.prog_bar_len = 80
 
-#     for part in tqdm(dataset_parts, desc='Downloading LibriSpeech parts'):
-#         logging.info(f'Processing split: {part}')
-#         # Determine the valid URL for a given split.
-#         if part in LIBRISPEECH:
-#             url = f'{base_url}/12'
-#         elif part in MINI_LIBRISPEECH:
-#             url = f'{base_url}/31'
-#         else:
-#             logging.warning(f'Invalid dataset part name: {part}')
-#             continue
-#         # Split directory exists and seem valid? Skip this split.
-#         part_dir = target_dir / f'LibriSpeech/{part}'
-#         completed_detector = part_dir / '.completed'
-#         if completed_detector.is_file():
-#             logging.info(f'Skipping {part} because {completed_detector} exists.')
-#             continue
-#         # Maybe-download the archive.
-#         tar_name = f'{part}.tar.gz'
-#         tar_path = target_dir / tar_name
-#         if force_download or not tar_path.is_file():
-#             urlretrieve_progress(f'{url}/{tar_name}', filename=tar_path, desc=f'Downloading {tar_name}')
-#         # Remove partial unpacked files, if any, and unpack everything.
-#         shutil.rmtree(part_dir, ignore_errors=True)
-#         with tarfile.open(tar_path) as tar:
-#             tar.extractall(path=target_dir)
-#         completed_detector.touch()
+    def __call__(self, bytes_amount):
+        ''' Call
+        When called, increments seen_so_far by bytes_amount,
+        calculates percentage of seen_so_far/total file size
+        and prints progress bar.
+        '''
+        # To simplify we'll assume this is hooked up to a single filename.
+        with self._lock:
+            self._seen_so_far += bytes_amount
+            ratio = round((float(self._seen_so_far) /
+                          float(self._size)) * (self.prog_bar_len - 6), 1)
+            current_length = int(round(ratio))
 
-#     if alignments:
-#         completed_detector = target_dir / '.ali_completed'
-#         if completed_detector.is_file() and not force_download:
-#             return
-#         assert is_module_available('gdown'), 'To download LibriSpeech alignments, please install "pip install gdown"'
-#         import gdown
-#         ali_zip_path = str(target_dir / 'LibriSpeech-Alignments.zip')
-#         gdown.download(alignments_url, output=ali_zip_path)
-#         with zipfile.ZipFile(ali_zip_path) as f:
-#             f.extractall(path=target_dir)
-#             completed_detector.touch()
+            percentage = round(100 * ratio / (self.prog_bar_len - 6), 1)
+
+            bars = '+' * current_length
+            output = bars + ' ' * (self.prog_bar_len - current_length -
+                                   len(str(percentage)) - 1) + str(percentage) + '%'
+
+            if self._seen_so_far != self._size:
+                sys.stdout.write(output + '\r')
+            else:
+                sys.stdout.write(output + '\n')
+            sys.stdout.flush()
+
+
+class ZerothSpeechDownloader():
+    """ZerothSpeechDownloader
+    Class for downloading files from AWS
+    """
+
+    def __init__(self,
+                 aws_access_key_id="AKIASLNRD65N3ETEFPJW",
+                 aws_secret_access_key="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",
+                 region_name="ap-northeast-2"):
+
+        self.client = boto3.client('s3',
+                                   aws_access_key_id=aws_access_key_id,
+                                   aws_secret_access_key=aws_secret_access_key,
+                                   region_name=region_name)
+        self.bucket_name = 'zeroth-opensource'
+
+    def download(self, filename, dest_name):
+        s3 = boto3.resource('s3')
+        progress = ProgressPercentage(self.client, self.bucket_name, filename)
+        s3.Bucket(self.bucket_name).download_file(
+            filename, dest_name, Callback=progress)
+
+
+def download_zerothspeech(
+        target_dir: Pathlike = '.',
+        # dataset_parts: Optional[Union[str, Sequence[str]]] = "mini_librispeech",
+        force_download: bool = False,
+) -> None:
+    """
+    Download and untar the dataset, supporting both LibriSpeech and MiniLibrispeech
+
+    :param target_dir: Pathlike, the path of the dir to storage the dataset.
+    :param dataset_parts: "librispeech", "mini_librispeech",
+        or a list of splits (e.g. "dev-clean") to download.
+    :param force_download: Bool, if True, download the tars no matter if the tars exist.
+    :param alignments: should we download the alignments. The original source is:
+        https://github.com/CorentinJ/librispeech-alignments
+    :param base_url: str, the url of the OpenSLR resources.
+    :param alignments_url: str, the url of LibriSpeech word alignments
+    """
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_parts = ZEROTH
+
+    zeroth_dl = ZerothSpeechDownloader()
+
+    for part in tqdm(dataset_parts, desc='Downloading ZerothSpeech parts'):
+        logging.info(f'Processing split: {part}')
+
+        # Split directory exists and seem valid? Skip this split.
+        part_dir = target_dir / f'zeroth/{part}'
+        part_dir.mkdir(parents=True, exist_ok=True)
+        completed_detector = part_dir / '.completed'
+        if completed_detector.is_file():
+            logging.info(
+                f'Skipping {part} because {completed_detector} exists.')
+            continue
+        # Maybe-download the archive.
+        tar_name = f'{part}.tar.gz'
+        tar_path = target_dir / tar_name
+        if force_download or not tar_path.is_file():
+            zeroth_dl.download('v2/' + str(tar_name), str(tar_path))
+        # Remove partial unpacked files, if any, and unpack everything.
+        shutil.rmtree(part_dir, ignore_errors=True)
+        with tarfile.open(tar_path) as tar:
+            tar.extractall(path=part_dir)
+        completed_detector.touch()
+
+    for part in tqdm(('AUDIO_INFO', 'README.md'), desc='Downloading ZerothSpeech info'):
+        logging.info(f'Processing info: {part}')
+
+        # file exists and seem valid? Skip this file.
+        target_file = target_dir / f'zeroth/{part}'
+        if target_file.is_file():
+            logging.info(
+                f'Skipping {part} because {target_file} exists.')
+            continue
+        # Maybe-download the archive.
+        tar_name = f'{part}'
+        tar_path = target_file.parent / tar_name
+        if force_download or not tar_path.is_file():
+            zeroth_dl.download('v2/' + str(tar_name), str(tar_path))
 
 
 def prepare_zeroth(

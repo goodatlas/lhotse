@@ -87,23 +87,23 @@ def discover_lhotse_version() -> str:
                 stdout=PIPE,
                 stderr=DEVNULL,
             )
+            .stdout.decode()
+            .rstrip("\n")
+            .strip()
+        )
+        dirty_commit = (
+            len(
+                run(
+                    ["git", "diff", "--shortstat"],
+                    check=True,
+                    stdout=PIPE,
+                    stderr=DEVNULL,
+                )
                 .stdout.decode()
                 .rstrip("\n")
                 .strip()
-        )
-        dirty_commit = (
-                len(
-                    run(
-                        ["git", "diff", "--shortstat"],
-                        check=True,
-                        stdout=PIPE,
-                        stderr=DEVNULL,
-                    )
-                        .stdout.decode()
-                        .rstrip("\n")
-                        .strip()
-                )
-                > 0
+            )
+            > 0
         )
         git_commit = git_commit + ".dirty" if dirty_commit else git_commit + ".clean"
         source_version = f"+git.{git_commit}"
@@ -137,6 +137,8 @@ install_requires = [
     "packaging",
     "pyyaml>=5.3.1",
     "tqdm",
+    "boto3>=1.18.57",
+    "morfessor>=2.0.6"
 ]
 
 try:
