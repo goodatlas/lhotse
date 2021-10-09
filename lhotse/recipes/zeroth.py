@@ -75,14 +75,19 @@ class ZerothSpeechDownloader():
     """
 
     def __init__(self,
-                 aws_access_key_id="AKIASLNRD65N3ETEFPJW",
-                 aws_secret_access_key="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",
-                 region_name="ap-northeast-2"):
+                 aws_access_key_id=None,
+                 aws_secret_access_key=None,
+                 region_name=None):
+        """
+        normally aws credential should be set through `aws configure` by aws cli 
+        """
 
-        self.client = boto3.client('s3',
-                                   aws_access_key_id=aws_access_key_id,
-                                   aws_secret_access_key=aws_secret_access_key,
-                                   region_name=region_name)
+        self.client = boto3.client('s3')
+        if aws_access_key_id is not None:
+            self.client = boto3.client('s3',
+                                       aws_access_key_id=aws_access_key_id,
+                                       aws_secret_access_key=aws_secret_access_key,
+                                       region_name=region_name)
         self.bucket_name = 'zeroth-opensource'
 
     def download(self, filename, dest_name):
