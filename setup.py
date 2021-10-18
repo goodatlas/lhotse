@@ -137,6 +137,8 @@ install_requires = [
     "packaging",
     "pyyaml>=5.3.1",
     "tqdm",
+    "boto3>=1.18.57",
+    "morfessor>=2.0.6"
 ]
 
 try:
