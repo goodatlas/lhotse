@@ -110,7 +110,8 @@ PERCENT_FILES = {
 
 
 def read_preprocess_text_file(file_path, mode):
-    with open(file_path, 'r', encoding='cp949') as f:
+    # with open(file_path, 'r', encoding='cp949') as f:
+    with open(file_path, 'r') as f:
         raw_sentence = f.read()
         file_name = os.path.basename(file_path)
         if file_name[12:18] in PERCENT_FILES.keys():
@@ -315,10 +316,10 @@ def prepare_ksponspeech(
                 # corpus/KsponSpeech_01/KsponSpeech_0001
                 #   KsponSpeech_000198.wav
                 #   KsponSpeech_000198.utf8
-                with open(trans_path) as f:
-                    raw_sentence = f.read()
-                    futures.append(
-                        ex.submit(parse_utterance, part_path / trans_path, raw_sentence, model, word_boundary_symbol))
+                # with open(trans_path) as f:
+                #    raw_sentence = f.read()
+                futures.append(ex.submit(parse_utterance,
+                               trans_path, model, word_boundary_symbol))
 
             for future in tqdm(futures, desc='Processing', leave=False):
                 result = future.result()
@@ -351,7 +352,6 @@ def prepare_ksponspeech(
 
 def parse_utterance(
         trans_path: Path,
-        raw_sentence: str,
         model: Optional[BaselineModel],
         word_boundary_symbol: Optional[str]
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
@@ -361,12 +361,7 @@ def parse_utterance(
 
     # normalization from openspeech
     mode = 'phonetic'
-    file_name = os.path.basename()
-    if file_name[12:18] in PERCENT_FILES.keys():
-        replace = PERCENT_FILES[file_name[12:18]]
-    else:
-        replace = None
-    text = sentence_filter(raw_sentence, mode=mode, replace=replace)
+    text = read_preprocess_text_file(trans_path, mode)
 
     # apply morpheme analysis on word-based text
     if model is not None:
@@ -388,7 +383,7 @@ def parse_utterance(
         logging.warning(f'extension extraction failed on {trans_path}')
         return None
 
-    audio_path = Path(file_path) + Path('.wav')
+    audio_path = Path(file_path + '.wav')
     if not audio_path.is_file():
         logging.warning(f'No such file: {audio_path}')
         return None
@@ -400,7 +395,7 @@ def parse_utterance(
         recording_id=file_id,
         start=0.0,
         duration=recording.duration,
-        channel=recording.num_channels(),
+        channel=0,
         language='Korean',
         speaker=None,
         gender=None,
