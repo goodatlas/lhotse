@@ -9,8 +9,8 @@ __all__ = ['ksponspeech']
 
 @prepare.command(context_settings=dict(show_default=True))
 @click.argument('corpus_dir', type=click.Path(exists=True, dir_okay=True))
-@click.argument('morpheme_analysis_model_path', type=click.Path(exists=True, dir_okay=False))
 @click.argument('output_dir', type=click.Path())
+@click.option('-m', '--morpheme-analysis-model_path', type=click.Path(), default="")
 @click.option('-j', '--num-jobs', type=int, default=1,
               help='How many threads to use (can give good speed-ups with slow disks).')
 @click.option('-w', '--word-boundary-symbol', type=str, default="",

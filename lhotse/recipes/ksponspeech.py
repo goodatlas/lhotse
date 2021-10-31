@@ -292,6 +292,7 @@ def prepare_ksponspeech(
         manifests = read_manifests_if_cached(dataset_parts=dataset_parts,
                                              output_dir=output_dir)
 
+    model = None
     if os.path.exists(morpheme_analysis_model_path):
         # load model
         print(
@@ -364,6 +365,7 @@ def parse_utterance(
     text = read_preprocess_text_file(trans_path, mode)
 
     # apply morpheme analysis on word-based text
+    custom = None
     if model is not None:
         smooth = 0
         maxlen = 30
