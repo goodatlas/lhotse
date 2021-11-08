@@ -33,3 +33,4 @@ from .timit import *
 from .vctk import *
 from .yesno import *
 from .zeroth import *
+from .ksponspeech import *

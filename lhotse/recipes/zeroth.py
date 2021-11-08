@@ -212,6 +212,7 @@ def prepare_zeroth(
                 speakers[speaker_id]["gender"] = gender
                 speakers[speaker_id]["script_id"] = script_id
 
+    model = None
     if os.path.exists(morpheme_analysis_model_path):
         # load model
         print(
@@ -288,6 +289,7 @@ def parse_utterance(
         return None
 
     # apply morpheme analysis on word-based text
+    custom = ""
     if model is not None:
         smooth = 0
         maxlen = 30
