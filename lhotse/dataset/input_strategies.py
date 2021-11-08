@@ -146,6 +146,7 @@ class PrecomputedFeatures(BatchIO):
         self, cuts: CutSet, use_alignment_if_exists: Optional[str] = None
     ) -> torch.Tensor:
         """Returns the mask for supervised frames.
+
         :param use_alignment_if_exists: optional str, key for alignment type to use for generating the mask. If not
             exists, fall back on supervision time spans.
         """
@@ -214,6 +215,7 @@ class AudioSamples(BatchIO):
         self, cuts: CutSet, use_alignment_if_exists: Optional[str] = None
     ) -> torch.Tensor:
         """Returns the mask for supervised samples.
+
         :param use_alignment_if_exists: optional str, key for alignment type to use for generating the mask. If not
             exists, fall back on supervision time spans.
         """
@@ -248,6 +250,7 @@ class OnTheFlyFeatures(BatchIO):
         extractor: FeatureExtractor,
         wave_transforms: List[Callable[[torch.Tensor], torch.Tensor]] = None,
         num_workers: int = 0,
+        use_batch_extract: bool = True,
     ) -> None:
         """
         OnTheFlyFeatures' constructor.
@@ -255,10 +258,15 @@ class OnTheFlyFeatures(BatchIO):
         :param extractor: the feature extractor used on-the-fly (individually on each waveform).
         :param wave_transforms: an optional list of transforms applied on the batch of audio
             waveforms collated into a single tensor, right before the feature extraction.
+        :param use_batch_extract: when ``True``, we will call
+            :meth:`~lhotse.features.base.FeatureExtractor.extract_batch` to compute the features
+            as it is possibly faster. It has a restriction that all cuts must have the same
+            sampling rate. If that is not the case, set this to ``False``.
         """
         super().__init__(num_workers=num_workers)
         self.extractor = extractor
         self.wave_transforms = ifnone(wave_transforms, [])
+        self.use_batch_extract = use_batch_extract
 
     def __call__(self, cuts: CutSet) -> Tuple[torch.Tensor, torch.IntTensor]:
         """
@@ -274,17 +282,27 @@ class OnTheFlyFeatures(BatchIO):
             for idx in range(len(audios)):
                 audios[idx] = tfnm(audios[idx])
 
-        features_single = []
-        for idx, cut in enumerate(cuts):
-            samples = audios[idx].numpy()
-            try:
-                features = self.extractor.extract(samples, cuts[idx].sampling_rate)
-            except:
-                logging.error(
-                    f"Error while extracting the features for cut with ID {cut.id} -- details:\n{cut}"
-                )
-                raise
-            features_single.append(torch.from_numpy(features))
+        if self.use_batch_extract:
+            # Batch extraction is possibly faster depending on the implementation
+            # of the feature extractor.
+            assert all(c.sampling_rate == cuts[0].sampling_rate for c in cuts)
+            features_single = self.extractor.extract_batch(
+                audios, sampling_rate=cuts[0].sampling_rate
+            )
+        else:
+            # Sequential extraction allows the sampling rates to be different.
+            features_single = []
+            for idx, cut in enumerate(cuts):
+                samples = audios[idx].numpy()
+                try:
+                    features = self.extractor.extract(samples, cuts[idx].sampling_rate)
+                except:
+                    logging.error(
+                        f"Error while extracting the features for cut with ID {cut.id} -- details:\n{cut}"
+                    )
+                    raise
+                features_single.append(torch.from_numpy(features))
+
         features_batch = collate_matrices(features_single, padding_value=LOG_EPSILON)
 
         feature_lens = torch.tensor(
@@ -336,6 +354,7 @@ class OnTheFlyFeatures(BatchIO):
         self, cuts: CutSet, use_alignment_if_exists: Optional[str] = None
     ) -> torch.Tensor:
         """Returns the mask for supervised samples.
+
         :param use_alignment_if_exists: optional str, key for alignment type to use for generating the mask. If not
             exists, fall back on supervision time spans.
         """

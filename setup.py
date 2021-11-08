@@ -53,7 +53,7 @@ project_root = Path(__file__).parent
 # NOTE: REMEMBER TO UPDATE THE FALLBACK VERSION IN lhotse/__init__.py WHEN RELEASING #
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 MAJOR_VERSION = 0
-MINOR_VERSION = 11
+MINOR_VERSION = 12
 PATCH_VERSION = 0
 IS_DEV_VERSION = True  # False = public release, True = otherwise
 
@@ -150,12 +150,16 @@ try:
     import torch
 
     torch_ver = LooseVersion(torch.__version__)
-    if torch_ver >= LooseVersion("1.9.2"):
-        raise NotImplementedError("PyTorch version >= 1.9.2 is not yet supported")
-    if torch_ver >= LooseVersion("1.9.1"):
+    if torch_ver >= LooseVersion("1.10.1"):
+        raise NotImplementedError("PyTorch version >= 1.10.1 is not yet supported")
+    elif torch_ver >= LooseVersion("1.10.0"):
+        install_requires.append("torchaudio==0.10.0")
+    elif torch_ver >= LooseVersion("1.9.1"):
         install_requires.append("torchaudio==0.9.1")
     elif torch_ver >= LooseVersion("1.9.0"):
         install_requires.append("torchaudio==0.9.0")
+    elif torch_ver >= LooseVersion("1.8.2"):
+        install_requires.append("torchaudio==0.8.2")
     elif torch_ver >= LooseVersion("1.8.1"):
         install_requires.append("torchaudio==0.8.1")
     elif torch_ver >= LooseVersion("1.8.0"):

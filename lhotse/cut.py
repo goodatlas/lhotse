@@ -327,6 +327,60 @@ class Cut:
         features = np.flip(self.load_features().transpose(1, 0), 0)
         return plt.matshow(features)
 
+    def plot_alignment(self, alignment_type: str = "word"):
+        """
+        Display the alignment on top of a spectrogram. Requires matplotlib to be installed.
+        """
+        import matplotlib.pyplot as plt
+        from lhotse import Fbank
+        from lhotse.utils import compute_num_frames
+
+        assert (
+            len(self.supervisions) == 1
+        ), "Cannot plot alignment: there has to be exactly one supervision in a Cut."
+        sup = self.supervisions[0]
+        assert (
+            sup.alignment is not None and alignment_type in sup.alignment
+        ), f"Cannot plot alignment: missing alignment field or alignment type '{alignment_type}'"
+
+        fbank = Fbank()
+
+        feats = self.compute_features(fbank)
+        speaker = sup.speaker
+        language = sup.language
+
+        fig = plt.matshow(np.flip(feats.transpose(1, 0), 0))
+        plt.title(
+            "Cut ID:" + self.id + ", Speaker:" + speaker + ", Language:" + language
+        )
+        plt.tick_params(
+            axis="both",
+            which="major",
+            labelbottom=True,
+            labeltop=False,
+            bottom=True,
+            top=False,
+        )
+
+        for idx, item in enumerate(sup.alignment[alignment_type]):
+            is_even = bool(idx % 2)
+            end_frame = compute_num_frames(
+                item.end,
+                frame_shift=fbank.frame_shift,
+                sampling_rate=self.sampling_rate,
+            )
+            plt.text(
+                end_frame - 4,
+                70 if is_even else 45,
+                item.symbol,
+                fontsize=12,
+                color="w",
+                rotation="vertical",
+            )
+            plt.axvline(end_frame, color="k")
+
+        plt.show()
+
     def trim_to_supervisions(
         self,
         keep_overlapping: bool = True,
@@ -3301,6 +3355,152 @@ class CutSet(Serializable, Sequence[Cut]):
         cuts_with_feats = combine(progress(f.result() for f in futures))
         return cuts_with_feats
 
+    def compute_and_store_features_batch(
+        self,
+        extractor: FeatureExtractor,
+        storage_path: Pathlike,
+        batch_duration: Seconds = 600.0,
+        num_workers: int = 4,
+        augment_fn: Optional[AugmentFn] = None,
+        storage_type: Type[FW] = LilcomHdf5Writer,
+    ) -> "CutSet":
+        """
+        Extract features for all cuts in batches.
+        This method is intended for use with compatible feature extractors that
+        implement an accelerated :meth:`~lhotse.FeatureExtractor.extract_batch` method.
+        For example, ``kaldifeat`` extractors can be used this way (see, e.g.,
+        :class:`~lhotse.KaldifeatFbank` or :class:`~lhotse.KaldifeatMfcc`).
+
+        When a CUDA GPU is available and enabled for the feature extractor, this can
+        be much faster than :meth:`.CutSet.compute_and_store_features`.
+        Otherwise, the speed will be comparable to single-threaded extraction.
+
+        Example: extract fbank features on one GPU, using 4 dataloading workers
+        for reading audio, and store the arrays in an HDF5 file with
+        lilcom compression::
+
+            >>> from lhotse import KaldifeatFbank, KaldifeatFbankConfig
+            >>> extractor = KaldifeatFbank(KaldifeatFbankConfig(device='cuda'))
+            >>> cuts = CutSet(...)
+            ... cuts = cuts.compute_and_store_features_batch(
+            ...     extractor=extractor,
+            ...     storage_path='feats',
+            ...     batch_duration=500,
+            ...     num_workers=4,
+            ... )
+
+        :param extractor: A :class:`~lhotse.features.base.FeatureExtractor` instance,
+            which should implement an accelerated ``extract_batch`` method.
+        :param storage_path: The path to location where we will store the features.
+            The exact type and layout of stored files will be dictated by the
+            ``storage_type`` argument.
+        :param batch_duration: The maximum number of audio seconds in a batch.
+            Determines batch size dynamically.
+        :param num_workers: How many background dataloading workers should be used
+            for reading the audio.
+        :param augment_fn: an optional callable used for audio augmentation.
+            Be careful with the types of augmentations used: if they modify
+            the start/end/duration times of the cut and its supervisions,
+            you will end up with incorrect supervision information when using this API.
+            E.g. for speed perturbation, use ``CutSet.perturb_speed()`` instead.
+        :param storage_type: a ``FeaturesWriter`` subclass type.
+            It determines how the features are stored to disk,
+            e.g. separate file per array, HDF5 files with multiple arrays, etc.
+        :return: Returns a new ``CutSet`` with ``Features`` manifests attached to the cuts.
+        """
+        import torch
+        from torch.utils.data import DataLoader
+        from lhotse.dataset import SingleCutSampler, UnsupervisedWaveformDataset
+        from lhotse.qa import validate_features
+
+        frame_shift = extractor.frame_shift
+        dataset = UnsupervisedWaveformDataset(collate=False)
+        sampler = SingleCutSampler(self, max_duration=batch_duration)
+        dloader = DataLoader(
+            dataset, batch_size=None, sampler=sampler, num_workers=num_workers
+        )
+
+        cuts_with_feats = []
+        with storage_type(storage_path) as writer, tqdm(
+            desc="Computing features in batches", total=sampler.num_cuts
+        ) as progress:
+            for batch in dloader:
+                cuts = batch["cuts"]
+                waves = batch["audio"]
+
+                assert all(c.sampling_rate == cuts[0].sampling_rate for c in cuts)
+
+                # Optionally apply the augment_fn
+                if augment_fn is not None:
+                    waves = [
+                        augment_fn(w, c.sampling_rate) for c, w in zip(cuts, waves)
+                    ]
+
+                # Move the audio data to the right device.
+                waves = [w.to(extractor.device) for w in waves]
+
+                # The actual extraction is here.
+                with torch.no_grad():
+                    # Note: chunk_size option limits the memory consumption
+                    # for very long cuts.
+                    features = extractor.extract_batch(
+                        waves, sampling_rate=cuts[0].sampling_rate
+                    )
+
+                for cut, feat_mtx in zip(cuts, features):
+                    if isinstance(cut, PaddingCut):
+                        # For padding cuts, just fill out the fields in the manfiest
+                        # and don't store anything.
+                        cuts_with_feats.append(
+                            fastcopy(
+                                cut,
+                                num_frames=feat_mtx.shape[0],
+                                num_features=feat_mtx.shape[1],
+                                frame_shift=frame_shift,
+                            )
+                        )
+                        continue
+                    # Store the computed features and describe them in a manifest.
+                    if isinstance(feat_mtx, torch.Tensor):
+                        feat_mtx = feat_mtx.cpu().numpy()
+                    storage_key = writer.write(cut.id, feat_mtx)
+                    feat_manifest = Features(
+                        start=cut.start,
+                        duration=cut.duration,
+                        type=extractor.name,
+                        num_frames=feat_mtx.shape[0],
+                        num_features=feat_mtx.shape[1],
+                        frame_shift=frame_shift,
+                        sampling_rate=cut.sampling_rate,
+                        channels=0,
+                        storage_type=writer.name,
+                        storage_path=str(writer.storage_path),
+                        storage_key=storage_key,
+                    )
+                    validate_features(feat_manifest, feats_data=feat_mtx)
+
+                    # Update the cut manifest.
+                    if isinstance(cut, MonoCut):
+                        cut = fastcopy(cut, features=feat_manifest)
+                    if isinstance(cut, MixedCut):
+                        # If this was a mixed cut, we will just discard its
+                        # recordings and create a new mono cut that has just
+                        # the features attached.
+                        cut = MonoCut(
+                            id=cut.id,
+                            start=0,
+                            duration=cut.duration,
+                            channel=0,
+                            supervisions=cut.supervisions,
+                            features=feat_manifest,
+                            recording=None,
+                        )
+                    cuts_with_feats.append(cut)
+
+                progress.update(len(cuts))
+
+        return CutSet.from_cuts(cuts_with_feats)
+
     def compute_and_store_recordings(
         self,
         storage_path: Pathlike,
@@ -3582,18 +3782,18 @@ def mix(
     preserve_id: Optional[str] = None,
 ) -> MixedCut:
     """
-    Overlay, or mix, two cuts. Optionally the `mixed_in_cut` may be shifted by `offset` seconds
+    Overlay, or mix, two cuts. Optionally the ``mixed_in_cut`` may be shifted by ``offset`` seconds
     and scaled down (positive SNR) or scaled up (negative SNR).
     Returns a MixedCut, which contains both cuts and the mix information.
-    The actual feature mixing is performed during the call to ``MixedCut.load_features()``.
+    The actual feature mixing is performed during the call to :meth:`~MixedCut.load_features`.
 
     :param reference_cut: The reference cut for the mix - offset and snr are specified w.r.t this cut.
     :param mixed_in_cut: The mixed-in cut - it will be offset and rescaled to match the offset and snr parameters.
     :param offset: How many seconds to shift the ``mixed_in_cut`` w.r.t. the ``reference_cut``.
-    :param snr: Desired SNR of the `right_cut` w.r.t. the `left_cut` in the mix.
+    :param snr: Desired SNR of the ``right_cut`` w.r.t. the ``left_cut`` in the mix.
     :param preserve_id: optional string ("left", "right"). when specified, append will preserve the cut id
         of the left- or right-hand side argument. otherwise, a new random id is generated.
-    :return: A MixedCut instance.
+    :return: A :class:`~MixedCut` instance.
     """
     if (
         any(isinstance(cut, PaddingCut) for cut in (reference_cut, mixed_in_cut))
