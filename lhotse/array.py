@@ -1,11 +1,12 @@
 import decimal
 from dataclasses import asdict, dataclass
 from math import isclose
+from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
 
-from lhotse.utils import Seconds
+from lhotse.utils import Pathlike, Seconds, fastcopy
 
 
 @dataclass
@@ -67,6 +68,13 @@ class Array:
         # Load and return the array from the storage
         return storage.read(self.storage_key)
 
+    def with_path_prefix(self, path: Pathlike) -> "Array":
+        """
+        Return a copy of the array with ``path`` added as a prefix
+        to the ``storage_path`` member.
+        """
+        return fastcopy(self, storage_path=str(Path(path) / self.storage_path))
+
 
 @dataclass
 class TemporalArray:
@@ -91,7 +99,7 @@ class TemporalArray:
         ...     manifest = writer.store_array(
         ...         key='ali-1',
         ...         value=alignment,
-        ...         frame_shift=0.4,  # e.g., 10ms frames and subsampling_factor=4
+        ...         frame_shift=0.04,  # e.g., 10ms frames and subsampling_factor=4
         ...         temporal_dim=0,
         ...         start=0
         ...     )
@@ -122,8 +130,12 @@ class TemporalArray:
         return len(self.shape)
 
     @property
+    def num_frames(self) -> int:
+        return self.shape[self.temporal_dim]
+
+    @property
     def duration(self) -> Seconds:
-        return self.shape[self.temporal_dim] * self.frame_shift
+        return self.num_frames * self.frame_shift
 
     @property
     def end(self) -> Seconds:
@@ -187,6 +199,13 @@ class TemporalArray:
             left_offset_frames=left_offset_frames,
             right_offset_frames=right_offset_frames,
         )
+
+    def with_path_prefix(self, path: Pathlike) -> "TemporalArray":
+        """
+        Return a copy of the array with ``path`` added as a prefix
+        to the ``storage_path`` member.
+        """
+        return fastcopy(self, array=self.array.with_path_prefix(path))
 
 
 def seconds_to_frames(

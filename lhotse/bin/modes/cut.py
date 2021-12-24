@@ -1,9 +1,11 @@
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import click
 
 from lhotse.bin.modes.cli_base import cli
 from lhotse.cut import CutSet, append_cuts, make_windowed_cuts_from_features, mix_cuts
+from lhotse.serialization import load_manifest_lazy_or_eager
 from lhotse.utils import Pathlike
 
 
@@ -56,6 +58,86 @@ def simple(
         recordings=recording_set, supervisions=supervision_set, features=feature_set
     )
     cut_set.to_file(output_cut_manifest)
+
+
+@cut.command()
+@click.argument("cuts", type=click.Path(exists=True, dir_okay=False))
+@click.argument("output_cuts", type=click.Path())
+@click.option(
+    "--keep-overlapping/--discard-overlapping",
+    type=bool,
+    default=True,
+    help="""when `False`, it will discard parts of other supervisions that overlap with the
+            main supervision. In the illustration, it would discard `Sup2` in `Cut1` and `Sup1` in `Cut2`.""",
+)
+@click.option(
+    "-d",
+    "--min-duration",
+    type=float,
+    default=None,
+    help="""An optional duration in seconds; specifying this argument will extend the cuts
+            that would have been shorter than `min_duration` with actual acoustic context in the recording/features.
+            If there are supervisions present in the context, they are kept when `keep_overlapping` is true.
+            If there is not enough context, the returned cut will be shorter than `min_duration`.
+            If the supervision segment is longer than `min_duration`, the return cut will be longer.""",
+)
+@click.option(
+    "-c",
+    "--context-direction",
+    type=click.Choice(["center", "left", "right", "random"]),
+    default="center",
+    help="""Which direction should the cut be expanded towards to include context.
+            The value of "center" implies equal expansion to left and right;
+            random uniformly samples a value between "left" and "right".""",
+)
+def trim_to_supervisions(
+    cuts: Pathlike,
+    output_cuts: Pathlike,
+    keep_overlapping: bool,
+    min_duration: Optional[float],
+    context_direction: str,
+):
+    """
+    Splits each input cut into as many cuts as there are supervisions.
+    These cuts have identical start times and durations as the supervisions.
+    When there are overlapping supervisions, they can be kept or discarded with options.
+
+    \b
+    For example, the following cut:
+                Cut
+        |-----------------|
+         Sup1
+        |----|  Sup2
+           |-----------|
+
+    \b
+    is transformed into two cuts:
+         Cut1
+        |----|
+         Sup1
+        |----|
+           Sup2
+           |-|
+                Cut2
+           |-----------|
+           Sup1
+           |-|
+                Sup2
+           |-----------|
+    """
+    from lhotse.serialization import load_manifest_lazy_or_eager
+
+    cuts = load_manifest_lazy_or_eager(cuts)
+
+    with CutSet.open_writer(output_cuts) as writer:
+        for c in cuts:
+            subcuts = c.trim_to_supervisions(
+                keep_overlapping=keep_overlapping,
+                min_duration=min_duration,
+                context_direction=context_direction,
+            )
+            for sc in subcuts:
+                writer.write(sc)
 
 
 @cut.command()
@@ -290,3 +372,25 @@ def pad(
     cut_set = CutSet.from_file(cut_manifest)
     padded_cut_set = cut_set.pad(desired_duration=duration)
     padded_cut_set.to_file(output_cut_manifest)
+
+
+@cut.command()
+@click.argument("cutset", type=click.Path(exists=True, dir_okay=False))
+@click.argument("output", type=click.Path())
+def decompose(cutset: Pathlike, output: Pathlike):
+    """
+    \b
+    Decompose CUTSET into:
+        * recording set (recordings.jsonl.gz)
+        * feature set (features.jsonl.gz)
+        * supervision set (supervisions.jsonl.gz)
+
+    If any of these are not preset in any of the cuts,
+    the corresponding file for them will be empty.
+    """
+    cuts = load_manifest_lazy_or_eager(cutset)
+    assert isinstance(
+        cuts, CutSet
+    ), f"Only CutSet can be decomposed (got: {type(cuts)} from '{cutset}')"
+    output = Path(output)
+    cuts.decompose(output_dir=output, verbose=True)
